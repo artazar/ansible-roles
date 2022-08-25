@@ -1,0 +1,13 @@
+---
+- name: Apply custom syslog configuration
+  tags: syslog
+  block:
+  - name: Set log files to be owned by root group for promtail
+    tags: syslog_group
+    lineinfile:
+      dest: /etc/rsyslog.conf
+      regex: "^\\$FileGroup"
+      line: "$FileGroup root"
+      state: present
+
+  notify: restart rsyslog

@@ -1,0 +1,32 @@
+- name: Configure MD RAID check cron jobs
+  tags: mdcheck
+  block:
+  - name: disable core ubuntu system tasks
+    ansible.builtin.systemd:
+      name: "{{ item }}"
+      state: stopped
+      enabled: no
+    loop:
+      - mdcheck_start.service
+      - mdcheck_start.timer
+      - mdcheck_continue.service
+      - mdcheck_continue.timer
+
+  - name: put cron script to do raid check
+    ansible.builtin.template:
+      src: mdcheck.py.j2
+      dest: /usr/local/bin/mdcheck.py
+      owner: root
+      group: root
+      mode: '0700'
+
+  - name: create cron task to execute script monthly
+    ansible.builtin.cron:
+      name: mdcheck
+      job: /usr/local/bin/mdcheck.py
+      month: "*/2"
+      weekday: 0
+      hour: 21
+      minute: 0
+
+  when: '"raid" in group_names'

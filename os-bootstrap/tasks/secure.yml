@@ -1,0 +1,157 @@
+---
+- name: Apply security configuration
+  tags: security
+  block:
+  - name: Install fail2ban
+    tags: fail2ban
+    apt:
+      pkg: fail2ban
+      state: present
+
+  - name: Apply SSH daemon configuration
+    tags: [ssh, sshd, ssh_security]
+    block:
+    - name: Disallow password authentication
+      lineinfile:
+        dest: /etc/ssh/sshd_config
+        regexp: "^PasswordAuthentication"
+        line: "PasswordAuthentication no"
+        state: present
+
+    - name: Disallow root SSH access 1
+      lineinfile:
+        dest: /etc/ssh/sshd_config
+        regexp: "^PermitRootLogin"
+        state: absent
+
+    - name: Disallow root SSH access 2
+      lineinfile:
+        dest: /etc/ssh/sshd_config
+        regexp: "^PermitRootLogin"
+        line: "PermitRootLogin no"
+        state: present
+
+    - name: Set SSH session timeouts
+      lineinfile:
+        dest: /etc/ssh/sshd_config
+        regexp: "^ClientAliveInterval"
+        line: "ClientAliveInterval {{ ssh_keepalive_timeout }}"
+        state: present
+
+    - name: Set SSH listen address var
+      set_fact:
+        ssh_listen_address: "{{ ssh_bastion | default(false) | ternary('0.0.0.0', ansible_all_ipv4_addresses | ansible.utils.ipaddr(privnet_cidr) | first) }}"
+
+    - name: Bind SSH listen address
+      lineinfile:
+        dest: /etc/ssh/sshd_config
+        regexp: "^ListenAddress"
+        line: "ListenAddress {{ ssh_listen_address }}"
+        state: present
+
+    - name: Ensure sshd systemd override directory exists
+      file:
+        path: /etc/systemd/system/sshd.service.d
+        state: directory
+
+    - name: Start sshd service after network is ready
+      copy:
+        dest: /etc/systemd/system/sshd.service.d/wait_for_network.conf
+        src: sshd_wait_for_network.conf
+
+    # Ref: https://stackoverflow.com/questions/24124140/ssh-agent-forwarding-with-ansible
+    - name: Enable SSH forwarding for sudo
+      lineinfile:
+        dest: /etc/sudoers
+        insertafter: '^#?\s*Defaults\s+env_keep\b'
+        line: 'Defaults    env_keep += "SSH_AUTH_SOCK"'
+
+    notify: restart ssh
+
+  - name: Delete /etc/sudoers.d/ files
+    file:
+      path: /etc/sudoers.d/*
+      state: absent
+
+  - name: Apply UFW configuration
+    tags: [ufw, firewall]
+    block:
+    - name: Install ufw package
+      apt:
+        pkg: ufw
+        state: present
+
+    - name: Setup ufw for allowed TCP ports
+      community.general.ufw:
+        rule: allow
+        port: "{{ item }}"
+        proto: tcp
+      loop: "{{ merged_tcp_allowed_ports }}"
+
+    - name: Allow all access from RFC1918 networks to this host
+      community.general.ufw:
+        rule: allow
+        src: '{{ item }}'
+      loop:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+
+    - name: Set desired ufw state
+      community.general.ufw:
+        state: "{{ ufw_state }}"
+
+  # inspired by: https://ultramookie.com/2020/10/geoip-blocking-ubuntu-20.04/
+  - name: Prepare GeoIP blocking configuration
+    tags: [geoip_block]
+    block:
+    - name: Create directory
+      file:
+        path: /usr/share/xt_geoip
+        state: directory
+    - name: Put geo-update.sh script in place  
+      copy:
+        dest: /usr/local/bin/geo-update.sh
+        src: geo-update.sh
+        owner: root
+        group: root
+        mode: '0700'
+    - name: create cron task to update geoip db monthly
+      ansible.builtin.cron:
+        name: geoip-update
+        job: /usr/local/bin/geo-update.sh
+        month: "*"
+        weekday: 0
+        hour: 21
+        minute: 0
+    - name: Load module
+      shell: modprobe xt_geoip
+    - name: Load module on boot
+      lineinfile:
+        dest: /etc/modules
+        regexp: "^xt_geoip"
+        line: "xt_geoip"
+        state: present
+    - name: Add rule to ufw configuration to allow SSH access for a specific country set
+      blockinfile:
+        block: |
+          # GeoIP block
+          -A ufw-before-input -p tcp -m geoip ! --source-country {{ ssh_allowed_countries | join(',') }} -m tcp --dport 22 -j DROP
+        dest: /etc/ufw/before.rules
+        insertafter: ".*ufw-before-input.*"
+        backup: yes
+      notify: reload ufw
+
+    when: geoip_block == true 
+
+  - name: Delete root password
+    shell: passwd -d root
+
+  - name: Set desired auditd state
+    tags: [auditd]
+    service:
+      name: auditd
+      state: "{{ 'started' if auditd_enabled == 'yes' else 'stopped' }}"
+      enabled: "{{ auditd_enabled }}"
+    notify: reboot
+

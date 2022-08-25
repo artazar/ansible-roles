@@ -1,0 +1,29 @@
+- name: Apply OS tuning
+  tags: tuning
+  block:
+  - name: set cpu frequency governer performance mode
+    shell: find /sys/devices/system/cpu/ -maxdepth 1 -type d -name 'cpu[0-9]*' -exec bash -c 'echo performance > {}/cpufreq/scaling_governor' \;
+  - name: disable apport
+    lineinfile:
+      dest: /etc/default/apport
+      regex: "^enabled="
+      line: "enabled=0"
+      state: present
+      create: yes
+  - name: set grub options
+    tags: grub
+    ansible.builtin.replace:
+      path: /etc/default/grub
+      regexp: '(^GRUB_CMDLINE_LINUX=".*){{ item.option }}=.*?((?:\s.*"$|"$))'
+      replace: '\1{{ item.option }}={{ item.value }}\2'
+      validate: /bin/sh %s
+      mode: "0664"
+      backup: yes
+    loop: "{{ merged_grub_options }}"
+    loop_control:
+      label: "{{ item.option }}"
+    notify:
+      - update grub
+    when:
+      - merged_grub_options is defined
+      - merged_grub_options | length > 0

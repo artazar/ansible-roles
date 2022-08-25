@@ -1,0 +1,30 @@
+privnet_cidr: '10.0.0.0/8'
+
+ufw_state: enabled
+
+geoip_block: false
+ssh_allowed_countries: ["DE"]
+
+ssh_keepalive_timeout: 60
+
+auditd_enabled: yes
+
+default_extra_apt_repositories: []
+
+merged_extra_apt_repositories: '{{ default_extra_apt_repositories + extra_apt_repositories | default([]) }}'
+
+default_packages_to_install:
+- vim
+- mc
+- python3-pip
+
+merged_packages_to_install: '{{ default_packages_to_install + packages_to_install | default([]) }}'
+
+default_tcp_allowed_ports:
+- 22
+
+merged_tcp_allowed_ports: '{{ default_tcp_allowed_ports + tcp_allowed_ports | default([]) }}'
+
+default_grub_options: []
+
+merged_grub_options: '{{ default_grub_options + extra_grub_options | default([]) }}'

@@ -1,0 +1,36 @@
+---
+- name: Add extra repositories if needed
+  ansible.builtin.apt_repository:
+    repo: "{{ item }}"
+    state: present
+  with_items: "{{ merged_extra_apt_repositories }}"
+
+- name: Update APT package cache
+  apt:
+    update_cache: yes
+
+- name: Upgrade APT to the lastest packages
+  apt:
+    upgrade: safe
+
+- name: Install unattended-upgrades
+  apt:
+    pkg: unattended-upgrades
+    state: present
+
+- name: Adjust APT update intervals
+  template:
+    src: apt/10periodic
+    dest: /etc/apt/apt.conf.d/10periodic
+
+- name: Make sure unattended-upgrades only installs from security
+  lineinfile:
+    dest: /etc/apt/apt.conf.d/50unattended-upgrades
+    search_string: "{distro_codename}-updates"
+    state: absent
+
+- name: Install packages
+  apt:
+    pkg: "{{ item }}"
+    state: present
+  with_items: "{{ merged_packages_to_install }}"

@@ -1,0 +1,13 @@
+---
+- include: apt.yml
+  tags: packages
+- include: secure.yml
+  tags: security
+- include: ntp.yml
+  tags: ntp
+- include: tuning.yml
+  tags: tuning
+- include: syslog.yml
+  tags: syslog
+- include: mdcheck.yml
+  tags: mdcheck

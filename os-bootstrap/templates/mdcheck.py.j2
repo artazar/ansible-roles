@@ -1,0 +1,96 @@
+#!/usr/bin/python3
+
+### This script is a replacement for a built-in Ubuntu job for RAID scrubbing
+### that occurs on monthly basis and results in chaotic alerts coming from all hosts
+### for increased disk read activity.
+### The script includes generating an Alertmanager silence for the host where the script runs
+### and removing the silence, when mdcheck process ends.
+
+import requests
+import socket
+import datetime
+import time
+import os
+
+from subprocess import PIPE, Popen
+
+from random import randint
+from time import sleep
+
+from requests.auth import HTTPBasicAuth
+
+# check if day of month is 1-7 since we only want to run it once a month
+dt = datetime.datetime.today()
+if dt.day > 7:
+    exit(0)
+
+# helper function to get output of shell commands
+def cmdline(command):
+    process = Popen(
+        args=command,
+        stdout=PIPE,
+        shell=True
+    )
+    return process.communicate()[0]
+
+# alertmanager coordinates
+user = '{{ alertmanager_username }}'
+password = '{{ alertmanager_password }}'
+alertmanagerUrl = '{{ alertmanager_url }}'
+
+# how long we allow the job to run
+# most of the time the jobs should finish within 1 hour
+duration = 12 * 60 * 60   # 12 hours
+
+# we wait random amount of time to avoid raid checks running simultaneously across all hosts
+# the cron tasks are randomized within a 12-hour period
+sleep(randint(0, duration))
+
+# define the structure of the created silence
+# we want to silence the HostUnusualDiskReadRate alerts
+silence = {
+        "matchers": [
+            {"name": "alertname", "value": "HostUnusualDiskReadRate", "isRegex": False},
+            {"name": "instance", "value": "{{ ansible_all_ipv4_addresses | ansible.utils.ipaddr(privnet_cidr) | first }}:9100", "isRegex": False}
+        ],
+        "startsAt": datetime.datetime.utcfromtimestamp(time.time()).isoformat(),
+        "endsAt": datetime.datetime.utcfromtimestamp(time.time() + duration).isoformat(),
+        "comment": "RAID check on {}".format(socket.gethostname()),
+        "createdBy": "API",
+    }
+
+# create the silence for alerts
+createUrl = alertmanagerUrl + '/api/v2/silences'
+
+res = requests.post(
+    url=createUrl,
+    json=silence,
+    auth=HTTPBasicAuth(user, password)
+)
+
+res.raise_for_status()
+
+silenceId = res.json()["silenceID"]
+
+# run the actual RAID check
+cmd = '/usr/share/mdadm/mdcheck --duration="12 hours"'
+os.system(cmd)
+
+# wait for the specified duration
+n = 0
+while n < duration:
+    res = cmdline('cat /sys/block/md*/md/sync_action | grep check')
+    if (res == b'check'):
+        sleep(60)
+        n += 60
+    else:
+        break
+
+deleteUrl = alertmanagerUrl + '/api/v2/silence/' + silenceId
+
+res = requests.delete(
+    url=deleteUrl,
+    auth=HTTPBasicAuth(user, password)
+)
+
+res.raise_for_status()
