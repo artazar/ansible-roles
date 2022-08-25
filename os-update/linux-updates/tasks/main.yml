@@ -1,0 +1,5 @@
+- name: Run the tasks to install the OS updates
+  include: "{{ item }}"
+  with_first_found:
+    - "{{ ansible_distribution | lower }}.yml"
+    - "{{ ansible_os_family | lower }}.yml"

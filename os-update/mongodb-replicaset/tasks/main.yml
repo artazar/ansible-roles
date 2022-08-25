@@ -1,0 +1,67 @@
+## Here and later the checks are based on replica set member states
+## https://docs.mongodb.com/manual/reference/replica-states/ 
+- name: Assign mongo node to run delegated checks
+  block:
+  - set_fact:
+      mongo_delegated: "{{ groups['mongo_master'] | first }}"
+    when: mongodb_master | default(false) == false
+  - set_fact:
+      mongo_delegated: "{{ groups['mongo_secondary'] | first }}"
+    when: mongodb_master | default(false) == true
+
+## This is to fail in case we find master node on unexpected replica
+## Arbiter nodes are skipped, as they don't allow mongo shell invocations
+- name: Check that the expected node is master
+  shell: mongo --quiet -u {{ mongodb_root_admin_name }} -p {{ mongodb_root_admin_password }} --eval 'rs.status()["myState"]' 
+  register: result
+  failed_when: (result.stdout == "1" and mongodb_master | default("False")  == "False") or (result.stdout != "1" and mongodb_master | default("False")  == "True")
+  changed_when: false
+  no_log: true
+  when: mongodb_arbiter | default(false) == false
+
+## Masters are updated last and need to step down via direct call before stopping the service
+- name: Gracefully step down if we are on master node
+  shell: mongo --quiet -u {{ mongodb_root_admin_name }} -p {{ mongodb_root_admin_password }} --eval 'rs.stepDown(600)'
+  no_log: true
+  when: mongodb_master | default(false) == true
+
+- name: Stop the service
+  systemd:
+    name: mongod
+    state: stopped
+
+## We check that there are no other unexpected unavailable replicas
+- name: Check that only one stopped node is unavailable
+  shell: mongo --quiet -u {{ mongodb_root_admin_name }} -p {{ mongodb_root_admin_password }} --eval 'rs.status().members.forEach(function(x){print(x.state);})' | egrep -c 8 
+  register: result
+  failed_when: result.stdout != "1" or result.rc > 1
+  changed_when: false
+  no_log: true
+  retries: 3
+  delay: 5
+  until: result.stdout == "1"
+  delegate_to: "{{ mongo_delegated }}"
+
+- name: Include the role to update OS
+  include_role: 
+    name: infra/os-update/linux-updates
+  vars:
+    custom_excluded_packages:
+      - pmm2-client
+
+- name: Make sure the service is started
+  systemd:
+    name: mongod
+    state: started
+
+- name: Pause to allow time for cluster synchronization
+  wait_for:
+    timeout: 60
+
+- name: Check that all replicaset members are healthy
+  shell: mongo --quiet -u {{ mongodb_root_admin_name }} -p {{ mongodb_root_admin_password }} --eval 'rs.status().members.forEach(function(x){print(x.state);})' | egrep -cv [127]
+  register: result
+  failed_when: result.stdout != "0" or result.rc > 1
+  changed_when: false
+  no_log: true
+  delegate_to: "{{ mongo_delegated }}"

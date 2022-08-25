@@ -1,0 +1,34 @@
+- name: Stop the service
+  systemd:
+    name: rabbitmq-server
+    state: stopped
+
+- name: Check that the node is removed from cluster
+  shell: rabbitmqctl cluster_status --formatter json | python -c 'import json,sys;print("rabbit@{{ inventory_hostname }}" in json.load(sys.stdin)["running_nodes"])'
+  register: result
+  failed_when: result.stdout == "True" or result.rc > 0
+  changed_when: false
+  delegate_to: "{{ ansible_play_hosts | difference(inventory_hostname) | first }}"
+
+- name: Include the role to update OS
+  include_role: 
+    name: infra/os-update/linux-updates
+  vars:
+    custom_excluded_packages:
+      - erlang
+
+- name: Make sure the service is started
+  systemd:
+    name: rabbitmq-server
+    state: started
+
+- name: Pause to allow time for cluster synchronization
+  wait_for:
+    timeout: 60
+
+- name: Check that the node is successfully added back to cluster
+  shell: rabbitmqctl cluster_status --formatter json | python -c 'import json,sys;print("rabbit@{{ inventory_hostname }}" in json.load(sys.stdin)["running_nodes"])'
+# shell: rabbitmqctl cluster_status --quiet --silent | awk '/Running Nodes/,/Versions/' | grep {{ inventory_hostname }}
+  register: result
+  failed_when: result.stdout == "False" or result.rc > 0
+  changed_when: false

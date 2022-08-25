@@ -1,0 +1,7 @@
+## Update everything, except for:
+## docker-ce - should be handled by a separate kubernetes upgrade procedure
+
+default_excluded_packages: 
+  - docker-ce*
+
+excluded_packages: "{{ default_excluded_packages + custom_excluded_packages | default([]) }}"
